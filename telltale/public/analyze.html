@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analyse a text — TellTale</title>
+<meta name="description" content="Score a piece of writing for AI-likelihood: signal breakdown, sentence heatmap, flagged phrases and rewrite suggestions.">
+
+<meta property="og:site_name" content="TellTale">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Analyse a text — TellTale">
+<meta property="og:description" content="Score a piece of writing for AI-likelihood: signal breakdown, sentence heatmap, flagged phrases and rewrite suggestions.">
+<meta property="og:image" content="/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Analyse a text — TellTale">
+<meta name="twitter:description" content="Score a piece of writing for AI-likelihood: signal breakdown, sentence heatmap, flagged phrases and rewrite suggestions.">
+<meta name="twitter:image" content="/assets/og.png">
+<meta name="theme-color" content="#0b0c0f">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a99cff"/><stop offset="1" stop-color="#5eead4"/></linearGradient></defs>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="url(#lg)" opacity="0.14"/>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="none" stroke="url(#lg)" stroke-width="1.4"/>
+        <path d="M8.5 21.5c1.6-5.6 4.3-8.4 7.5-8.4s5.9 2.8 7.5 8.4" fill="none" stroke="url(#lg)" stroke-width="2.1" stroke-linecap="round"/>
+        <circle cx="16" cy="9.6" r="2.1" fill="url(#lg)"/>
+      </svg>
+      <span class="b">Tell<span class="dot">Tale</span></span>
+    </a>
+    <button class="nav-toggle" aria-label="Menu">☰</button>
+    <div class="nav-links">
+      <a href="/analyze">Analyse</a>
+      <a href="/compare">Compare</a>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/how-it-works">How it works</a>
+      <a href="/about">About</a>
+      <a class="nav-cta" href="/analyze">Check a text</a>
+    </div>
+  </div>
+</nav>
+
+<main class="wrap section-tight" style="padding-top:34px">
+  <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between;margin-bottom:18px">
+    <div>
+      <div class="eyebrow">Analyser</div>
+      <h1 style="font-size:clamp(1.7rem,3.4vw,2.4rem);margin:6px 0 4px">Check a text for machine fingerprints</h1>
+      <p class="small muted mb0">Paste at least a paragraph. Longer is better: the estimate stabilises past roughly 180 words and gets reliable past 400.</p>
+    </div>
+  </div>
+
+  <div class="split">
+    <!-- ------------------------------------------------------- editor -->
+    <section>
+      <div class="card card-pad-lg">
+        <div class="toolbar">
+          <span class="eyebrow">Samples</span>
+          <button class="chip" data-sample="ai">generated-sounding</button>
+          <button class="chip" data-sample="human">casual human</button>
+          <button class="chip" data-sample="mixed">edited academic</button>
+          <span class="spacer"></span>
+          <button class="btn btn-sm btn-ghost" id="upload-btn">⬆ Upload .txt</button>
+          <input type="file" id="file-input" accept=".txt,.md,text/plain" class="hidden">
+          <button class="btn btn-sm btn-ghost" id="clear-btn">Clear</button>
+        </div>
+
+        <div class="toolbar" id="register-bar" style="margin-bottom:10px"></div>
+
+        <div class="editor">
+          <div class="editor-shell">
+            <div class="editor-layer" id="layer" aria-hidden="true"></div>
+            <textarea id="tt-input" spellcheck="false" placeholder="Paste the text you want to check. Press Ctrl/⌘ + Enter to analyse."
+              aria-label="Text to analyse"></textarea>
+          </div>
+        </div>
+
+        <div class="legend">
+          <span><i style="background:rgba(255,111,94,0.55)"></i> strong stock phrase</span>
+          <span><i style="background:rgba(245,181,68,0.5)"></i> milder stock phrase</span>
+          <span><i style="background:rgba(139,124,246,0.5)"></i> textbook transition</span>
+          <span><i style="background:rgba(76,178,255,0.45)"></i> formal register</span>
+          <span><i style="background:rgba(61,220,151,0.5)"></i> human marker</span>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary btn-lg" id="run">Analyse text</button>
+          <button class="btn btn-lg" id="demo-fill">Use a sample</button>
+          <span class="counter" id="count">0 words</span>
+          <span class="spacer" style="flex:1"></span>
+          <span class="tiny muted nowrap">⌘/Ctrl + Enter</span>
+        </div>
+
+        <div id="live" class="grid grid-5" style="margin-top:18px;gap:10px"></div>
+        <div id="err" class="note hidden" style="margin-top:14px;border-color:rgba(255,111,94,0.45)"></div>
+      </div>
+
+      <div class="note small" style="margin-top:14px">
+        <strong>Register calibration:</strong> formal registers (academic, legal, technical, journalistic) legitimately use vocabulary that a single global scale punishes. Pick a profile above, or leave it on auto-detect and TellTale will infer one from the text's own genre markers — and tell you how much it changed the score.
+      </div>
+
+      <div class="note small" style="margin-top:14px">
+        <strong>Privacy:</strong> analysis runs on this server process only — no external API, no model provider, nothing leaves the machine. Scans you run here are stored locally in <code>data/scans.json</code> and can be wiped from the dashboard.
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------ results -->
+    <section id="results">
+      <div class="card card-pad-lg" id="empty-state">
+        <p class="card-title">How a report reads</p>
+        <h3 style="margin-top:12px">Paste text, hit analyse, get the reasoning</h3>
+        <p class="small">Each report contains a score with confidence, all 14 signal measurements, a sentence-by-sentence heatmap, the phrases that were flagged, and editorial suggestions if you're the writer.</p>
+        <div class="hr"></div>
+        <div class="steps">
+          <div class="step"><div class="step-num"></div><div><h4>Score &amp; confidence</h4><p class="small mb0">One number, plus how much weight the sample size can carry.</p></div></div>
+          <div class="step"><div class="step-num"></div><div><h4>Signal breakdown</h4><p class="small mb0">Rhythm, vocabulary, punctuation and voice — measured, weighted, attributed.</p></div></div>
+          <div class="step"><div class="step-num"></div><div><h4>Heatmap &amp; evidence</h4><p class="small mb0">Which sentences pulled the score up or down, and why.</p></div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/" style="margin-bottom:10px">
+          <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+            <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="none" stroke="#8b7cf6" stroke-width="1.4"/>
+            <path d="M8.5 21.5c1.6-5.6 4.3-8.4 7.5-8.4s5.9 2.8 7.5 8.4" fill="none" stroke="#5eead4" stroke-width="2.1" stroke-linecap="round"/>
+            <circle cx="16" cy="9.6" r="2.1" fill="#8b7cf6"/>
+          </svg>
+          <span class="b">Tell<span class="dot">Tale</span></span>
+        </a>
+        <p class="small muted" style="max-width:34ch">Stylometric AI-text detection with the reasoning left visible.</p>
+      </div>
+      <div><h4>Product</h4><a href="/analyze">Analyser</a><a href="/compare">Compare texts</a><a href="/dashboard">Dashboard</a></div>
+      <div><h4>Method</h4><a href="/how-it-works">How it works</a><a href="/how-it-works#signals">The 14 signals</a><a href="/how-it-works#ethics">Limits &amp; ethics</a></div>
+      <div><h4>Project</h4><a href="/about">About</a><a href="/privacy">Privacy</a>
+          <a href="/api/health">API health</a><a href="/api/stats">API stats</a></div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span id="yr"></span> TellTale. Zero dependencies, one Node process, no telemetry.</span>
+      <span>Detection is probabilistic. Use it to start a conversation, not to end someone's career.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/telltale-engine.js"></script>
+<script src="/assets/analyze.js"></script>
+</body>
+</html>

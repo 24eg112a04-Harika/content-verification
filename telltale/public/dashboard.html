@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — TellTale</title>
+<meta name="description" content="Every scan you've run: score distribution, recent checks and the stock phrases that keep showing up.">
+
+<meta property="og:site_name" content="TellTale">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Dashboard — TellTale">
+<meta property="og:description" content="Every scan you've run: score distribution, recent checks and the stock phrases that keep showing up.">
+<meta property="og:image" content="/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Dashboard — TellTale">
+<meta name="twitter:description" content="Every scan you've run: score distribution, recent checks and the stock phrases that keep showing up.">
+<meta name="twitter:image" content="/assets/og.png">
+<meta name="theme-color" content="#0b0c0f">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a99cff"/><stop offset="1" stop-color="#5eead4"/></linearGradient></defs>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="url(#lg)" opacity="0.14"/>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="none" stroke="url(#lg)" stroke-width="1.4"/>
+        <path d="M8.5 21.5c1.6-5.6 4.3-8.4 7.5-8.4s5.9 2.8 7.5 8.4" fill="none" stroke="url(#lg)" stroke-width="2.1" stroke-linecap="round"/>
+        <circle cx="16" cy="9.6" r="2.1" fill="url(#lg)"/>
+      </svg>
+      <span class="b">Tell<span class="dot">Tale</span></span>
+    </a>
+    <button class="nav-toggle" aria-label="Menu">☰</button>
+    <div class="nav-links">
+      <a href="/analyze">Analyse</a>
+      <a href="/compare">Compare</a>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/how-it-works">How it works</a>
+      <a href="/about">About</a>
+      <a class="nav-cta" href="/analyze">Check a text</a>
+    </div>
+  </div>
+</nav>
+
+<main class="wrap" style="padding-top:38px">
+  <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between">
+    <div>
+      <div class="eyebrow">Dashboard</div>
+      <h1 style="font-size:clamp(1.7rem,3.4vw,2.4rem);margin:6px 0 4px">Everything you've checked</h1>
+      <p class="small muted mb0" id="subtitle">Stored locally in <code>data/scans.json</code>. Nothing leaves this machine.</p>
+    </div>
+    <div class="btn-row">
+      <button class="chip" id="auto-btn">⟳ auto-refresh: off</button>
+      <button class="btn btn-sm" id="refresh">Refresh</button>
+      <button class="btn btn-sm btn-ghost" id="clear">Wipe history</button>
+    </div>
+  </div>
+
+  <div class="grid grid-4" id="stat-cards" style="margin-top:24px"></div>
+
+  <div class="split" style="margin-top:18px">
+    <div class="card card-pad-lg">
+      <div class="card-head"><p class="card-title">Score distribution</p><span class="tiny muted">last 400 scans</span></div>
+      <div class="hist" id="hist"></div>
+      <p class="small muted mb0" style="margin-top:12px">A pile-up on the right means you're mostly pasting generated text. A pile-up on the left means mostly human drafts.</p>
+    </div>
+    <div class="card card-pad-lg">
+      <div class="card-head"><p class="card-title">Phrases that keep appearing</p></div>
+      <div id="topmarkers"></div>
+    </div>
+  </div>
+
+  <div class="split" style="margin-top:18px;grid-template-columns:1.6fr 0.9fr">
+    <div class="card card-pad-lg">
+      <div class="card-head"><p class="card-title">Recent scans</p><span class="tiny muted" id="last-updated"></span></div>
+      <div id="recent"></div>
+    </div>
+    <div class="card card-pad-lg">
+      <div class="card-head"><p class="card-title">Activity feed</p></div>
+      <div class="feed" id="feed"></div>
+    </div>
+  </div>
+  <div style="height:50px"></div>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-bottom" style="border-top:0;margin-top:0">
+      <span>© <span id="yr"></span> TellTale. Zero dependencies, one Node process, no telemetry.</span>
+      <span>Detection is probabilistic. Use it wisely.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/dashboard.js"></script>
+</body>
+</html>

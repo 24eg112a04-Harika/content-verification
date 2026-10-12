@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TellTale — is this text AI-generated?</title>
+<meta name="description" content="TellTale checks writing for the stylistic fingerprints of machine-generated text: sentence rhythm, stock phrases, register and voice. Transparent signals, sentence-level heatmap, no black box.">
+
+<meta property="og:site_name" content="TellTale">
+<meta property="og:type" content="website">
+<meta property="og:title" content="TellTale — is this text AI-generated?">
+<meta property="og:description" content="TellTale checks writing for the stylistic fingerprints of machine-generated text: sentence rhythm, stock phrases, register and voice. Transparent signals, sentence-level heatmap, no black box.">
+<meta property="og:image" content="/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="TellTale — is this text AI-generated?">
+<meta name="twitter:description" content="TellTale checks writing for the stylistic fingerprints of machine-generated text: sentence rhythm, stock phrases, register and voice. Transparent signals, sentence-level heatmap, no black box.">
+<meta name="twitter:image" content="/assets/og.png">
+<meta name="theme-color" content="#0b0c0f">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+        <defs>
+          <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#a99cff"/><stop offset="1" stop-color="#5eead4"/>
+          </linearGradient>
+        </defs>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="url(#lg)" opacity="0.14"/>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="none" stroke="url(#lg)" stroke-width="1.4"/>
+        <path d="M8.5 21.5c1.6-5.6 4.3-8.4 7.5-8.4s5.9 2.8 7.5 8.4" fill="none" stroke="url(#lg)" stroke-width="2.1" stroke-linecap="round"/>
+        <circle cx="16" cy="9.6" r="2.1" fill="url(#lg)"/>
+      </svg>
+      <span class="b">Tell<span class="dot">Tale</span></span>
+    </a>
+    <button class="nav-toggle" aria-label="Menu">☰</button>
+    <div class="nav-links">
+      <a href="/analyze">Analyse</a>
+      <a href="/compare">Compare</a>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/how-it-works">How it works</a>
+      <a href="/about">About</a>
+      <a class="nav-cta" href="/analyze">Check a text</a>
+    </div>
+  </div>
+</nav>
+
+<header class="wrap hero">
+  <div class="split">
+    <div>
+      <div class="eyebrow" style="margin-bottom:14px">Stylometric detector · 14 signals · no black boxes</div>
+      <h1>Was this text written by a <em>machine</em>?</h1>
+      <p class="hero-sub">Paste it in. TellTale measures the fingerprints that tend to separate generated prose from human writing — sentence rhythm, stock phrasing, register, voice — and shows you exactly which evidence moved the score.</p>
+      <div class="btn-row hero-actions">
+        <a class="btn btn-primary btn-lg" href="/analyze">Analyse a text →</a>
+        <a class="btn btn-lg" href="/how-it-works">How the score works</a>
+      </div>
+      <div class="hero-meta">
+        <span class="pill">⚡ ~40 ms per scan</span>
+        <span class="pill">🔒 nothing leaves your server</span>
+        <span class="pill">🧾 every point is traceable</span>
+      </div>
+    </div>
+    <div class="hero-visual">
+      <div class="card" id="mini" style="width:100%">
+        <div class="card-head">
+          <p class="card-title">Quick check</p>
+          <span class="pill small" id="mini-words">0 words</span>
+        </div>
+        <div class="editor-shell" style="margin-bottom:12px">
+          <textarea id="mini-input" rows="7" placeholder="Paste a paragraph here and we'll score it instantly…" spellcheck="false" style="min-height:170px"></textarea>
+        </div>
+        <div class="btn-row" style="margin-bottom:14px">
+          <button class="btn btn-primary btn-sm" id="mini-go">Check this text</button>
+          <button class="chip" data-sample="ai">sample: generated-sounding</button>
+          <button class="chip" data-sample="human">sample: human</button>
+        </div>
+        <div id="mini-result"></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section class="wrap section" id="what">
+  <div class="eyebrow">What you get</div>
+  <h2>Not just a number — the reasoning behind it</h2>
+  <p style="max-width:62ch">Most detectors hand you a percentage and a shrug. TellTale breaks the score into the signals that produced it, highlights the suspect sentences, and tells you what to change if you're the one being flagged.</p>
+  <div class="grid grid-3" style="margin-top:26px">
+    <div class="card card-hover">
+      <div class="pill pill-accent" style="margin-bottom:12px">01</div>
+      <h3>14-signal breakdown</h3>
+      <p class="small mb0">Every point of the score is attributed: rhythm, stock phrases, transitions, em dashes, contractions, specificity, and more — each with the measurement behind it.</p>
+    </div>
+    <div class="card card-hover">
+      <div class="pill pill-accent" style="margin-bottom:12px">02</div>
+      <h3>Sentence heatmap</h3>
+      <p class="small mb0">See which sentences read machine-like and which read human, with a one-line reason for each verdict. Patterns are rarely uniform across a document.</p>
+    </div>
+    <div class="card card-hover">
+      <div class="pill pill-accent" style="margin-bottom:12px">03</div>
+      <h3>Rewrite suggestions</h3>
+      <p class="small mb0">Concrete, editorial fixes: which stock phrases to cut, where the rhythm went flat, why zero contractions reads like documentation.</p>
+    </div>
+    <div class="card card-hover">
+      <div class="pill pill-accent" style="margin-bottom:12px">04</div>
+      <h3>Side-by-side compare</h3>
+      <p class="small mb0">Put up to four texts next to each other and see which one looks machine-written on the same scales. Handy for A/B drafts.</p>
+    </div>
+    <div class="card card-hover">
+      <div class="pill pill-accent" style="margin-bottom:12px">05</div>
+      <h3>Register calibration</h3>
+      <p class="small mb0">Academic, legal, technical, journalistic or personal profiles stop formal writing from being punished for being formal — and show you exactly how many points that adjusted.</p>
+    </div>
+    <div class="card card-hover">
+      <div class="pill pill-accent" style="margin-bottom:12px">06</div>
+      <h3>Paragraph-level reports</h3>
+      <p class="small mb0">Generated intro on top of a human body? Each paragraph gets its own score, so mixed authorship can't hide behind an average.</p>
+    </div>
+    <div class="card card-hover">
+      <div class="pill pill-accent" style="margin-bottom:12px">07</div>
+      <h3>Evidence packs</h3>
+      <p class="small mb0">Export the whole report as Markdown for a thread, or a JSON bundle with a SHA-256 integrity digest that anyone can verify hasn't been edited.</p>
+    </div>
+    <div class="card card-hover">
+      <div class="pill pill-accent" style="margin-bottom:12px">08</div>
+      <h3>Scan dashboard</h3>
+      <p class="small mb0">A running record of everything you've checked: score distribution, register mix, mixed-authorship documents, and the stock phrases that keep appearing.</p>
+    </div>
+    <div class="card card-hover">
+      <div class="pill pill-accent" style="margin-bottom:12px">09</div>
+      <h3>Runs locally</h3>
+      <p class="small mb0">A single Node process with zero dependencies. No API keys, no third-party calls, no uploads. Your text stays in your machine's memory and JSON file.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap section">
+  <div class="split">
+    <div>
+      <div class="eyebrow">Method</div>
+      <h2>How the score is built</h2>
+      <p>There is no AI judging the text. The engine measures surface statistics and blends them with weights that reflect how reliable each one is, then shows its work.</p>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num"></div>
+          <div>
+            <h4>Segment and measure</h4>
+            <p>The text is split into sentences and paragraphs. For each one we measure length, variance, vocabulary, punctuation and phrasing.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num"></div>
+          <div>
+            <h4>Score 14 signals</h4>
+            <p>Each signal converts a measurement into an AI-leaning probability from 0 to 1. Absent evidence never votes — no paragraphs, no paragraph signal.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num"></div>
+          <div>
+            <h4>Weight and blend</h4>
+            <p>A weighted mean produces a raw score. The strongest signals — phrase habits and rhythm — carry the most weight.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num"></div>
+          <div>
+            <h4>Shrink for short text</h4>
+            <p>Below ~180 words the score is pulled toward the middle and flagged low-confidence, because a short sample simply cannot support a strong claim.</p>
+          </div>
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:20px">
+        <a class="btn" href="/how-it-works">Read the full methodology</a>
+      </div>
+    </div>
+    <div class="card card-pad-lg">
+      <p class="card-title">Signal weights</p>
+      <div id="weights"></div>
+      <div class="note small" style="margin-top:16px">
+        <strong>Why these weights?</strong> Phrase habits and sentence-length variance are the most stable machine tells we found in testing across marketing copy, essays, reports and emails. Punctuation and long-word ratio are noisy, so they barely move the needle.
+      </div>
+      <div class="note small" style="margin-top:10px">
+        <strong>These are the general-register defaults.</strong> When a text is detected (or declared) as academic, legal, technical or journalistic, the profile rescales the signals that legitimately differ in that genre — rhythm stays in play everywhere, because no register explains away a flat rhythm and a diet of stock phrases.
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap section">
+  <div class="eyebrow">Honesty</div>
+  <h2>What this can and cannot do</h2>
+  <div class="grid grid-2" style="margin-top:22px">
+    <div class="card">
+      <h3 style="color:var(--human)">It can</h3>
+      <ul class="checklist">
+        <li class="yes"><b>✓</b><span>Recognise the stylistic signature of default, unedited model output: even sentence lengths, stock transitions, hedged generalities.</span></li>
+        <li class="yes"><b>✓</b><span>Show you the specific sentences and phrases that produced the suspicion, so you can judge the evidence yourself.</span></li>
+        <li class="yes"><b>✓</b><span>Tell you when a document is too short or too uniform to say anything useful.</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--ai)">It cannot</h3>
+      <ul class="checklist">
+        <li class="no"><b>✕</b><span>Prove authorship. A careful human can write prose that scores high, and a rewriter can launder machine text until it scores low.</span></li>
+        <li class="no"><b>✕</b><span>Detect text that was AI-generated in an earlier draft, then rewritten. It only sees what is in front of it.</span></li>
+        <li class="no"><b>✕</b><span>Justify punishing anyone. A score is a conversation starter, never a verdict. Academic misuse of these tools is a real problem; a single number is not a fair process.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="wrap section">
+  <div class="split">
+    <div>
+      <div class="eyebrow">FAQ</div>
+      <h2>Questions people actually ask</h2>
+      <div style="margin-top:14px">
+        <details class="faq" open><summary>Is a high score proof that AI wrote it?</summary><p>No. It is evidence of style, not authorship. Formal human writing — legal, academic, non-native English — often scores in the suspicious middle. Read the signal breakdown before drawing conclusions.</p></details>
+        <details class="faq"><summary>How accurate is it?</summary><p>On unedited model output with the usual habits it's usually decisive. On heavily edited or humanised text it degrades quickly — that's a limitation of every stylometric detector, including the commercial ones that claim 99% accuracy.</p></details>
+        <details class="faq"><summary>Do you send my text anywhere?</summary><p>No. The analysis runs in a single local process on this server. Nothing is sent to an external model or API. Only the scans you run through the app are stored, in <code>data/scans.json</code>, and you can wipe them from the dashboard.</p></details>
+        <details class="faq"><summary>Why did my own writing score as AI?</summary><p>Usually one of: em dashes, tidy sentence lengths, no contractions, or a corporate/academic register. The report lists every signal it used, and the "What to change" panel tells you which habits to break if you're being flagged unfairly.</p></details>
+        <details class="faq"><summary>Why does formal writing get its own profile?</summary><p>Because a single global scale misreads genre. A contract full of "shall", "hereby" and "indemnify" is not an AI tell — it's a contract. Register calibration discounts vocabulary that the genre explains and leaves the signals that no genre excuses fully in play. You can see the before/after score on every report, so the adjustment is never hidden.</p></details>
+        <details class="faq"><summary>What about GPTZero and the rest?</summary><p>Same family of techniques, different packaging. The difference here is that TellTale shows you the entire calculation instead of a proprietary confidence number. You can also run it yourself, which most detectors don't allow.</p></details>
+      </div>
+    </div>
+    <div>
+      <div class="card card-pad-lg">
+        <p class="card-title">The five bands</p>
+        <div id="bands" style="margin-top:14px"></div>
+        <div class="hr"></div>
+        <p class="small muted mb0">A score of 50 means the evidence is contradictory or thin. That is a real answer, and the honest one for a great deal of content in the wild.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap section-tight">
+  <div class="cta-band">
+    <h2 style="margin-bottom:8px">Bring us a suspicious paragraph</h2>
+    <p style="max-width:56ch;margin:0 auto 22px">Paste an email, a cover letter, an essay, a supplier's proposal. Thirty seconds later you'll know what it's made of.</p>
+    <div class="btn-row" style="justify-content:center">
+      <a class="btn btn-primary btn-lg" href="/analyze">Open the analyser</a>
+      <a class="btn btn-lg" href="/compare">Compare two drafts</a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/" style="margin-bottom:10px">
+          <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+            <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="none" stroke="#8b7cf6" stroke-width="1.4"/>
+            <path d="M8.5 21.5c1.6-5.6 4.3-8.4 7.5-8.4s5.9 2.8 7.5 8.4" fill="none" stroke="#5eead4" stroke-width="2.1" stroke-linecap="round"/>
+            <circle cx="16" cy="9.6" r="2.1" fill="#8b7cf6"/>
+          </svg>
+          <span class="b">Tell<span class="dot">Tale</span></span>
+        </a>
+        <p class="small muted" style="max-width:34ch">Stylometric AI-text detection with the reasoning left visible.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <a href="/analyze">Analyser</a>
+        <a href="/compare">Compare texts</a>
+        <a href="/dashboard">Dashboard</a>
+      </div>
+      <div>
+        <h4>Method</h4>
+        <a href="/how-it-works">How it works</a>
+        <a href="/how-it-works#signals">The 14 signals</a>
+        <a href="/how-it-works#ethics">Limits &amp; ethics</a>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <a href="/about">About</a>
+        <a href="/privacy">Privacy</a>
+          <a href="/api/health">API health</a>
+        <a href="/api/stats">API stats</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span id="yr"></span> TellTale. Zero dependencies, one Node process, no telemetry.</span>
+      <span>Detection is probabilistic. Use it to start a conversation, not to end someone's career.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/telltale-engine.js"></script>
+<script src="/assets/landing.js"></script>
+</body>
+</html>

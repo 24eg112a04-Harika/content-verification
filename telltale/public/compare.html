@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compare texts — TellTale</title>
+<meta name="description" content="Score two to four texts side by side on the same stylometric scales.">
+
+<meta property="og:site_name" content="TellTale">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Compare texts — TellTale">
+<meta property="og:description" content="Score two to four texts side by side on the same stylometric scales.">
+<meta property="og:image" content="/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Compare texts — TellTale">
+<meta name="twitter:description" content="Score two to four texts side by side on the same stylometric scales.">
+<meta name="twitter:image" content="/assets/og.png">
+<meta name="theme-color" content="#0b0c0f">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a99cff"/><stop offset="1" stop-color="#5eead4"/></linearGradient></defs>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="url(#lg)" opacity="0.14"/>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="none" stroke="url(#lg)" stroke-width="1.4"/>
+        <path d="M8.5 21.5c1.6-5.6 4.3-8.4 7.5-8.4s5.9 2.8 7.5 8.4" fill="none" stroke="url(#lg)" stroke-width="2.1" stroke-linecap="round"/>
+        <circle cx="16" cy="9.6" r="2.1" fill="url(#lg)"/>
+      </svg>
+      <span class="b">Tell<span class="dot">Tale</span></span>
+    </a>
+    <button class="nav-toggle" aria-label="Menu">☰</button>
+    <div class="nav-links">
+      <a href="/analyze">Analyse</a>
+      <a href="/compare">Compare</a>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/how-it-works">How it works</a>
+      <a href="/about">About</a>
+      <a class="nav-cta" href="/analyze">Check a text</a>
+    </div>
+  </div>
+</nav>
+
+<main class="wrap" style="padding-top:38px">
+  <div class="eyebrow">Compare</div>
+  <h1 style="font-size:clamp(1.7rem,3.4vw,2.4rem);margin:6px 0 4px">Two to four texts, same scales</h1>
+  <p class="small muted" style="max-width:70ch">Useful when you have a suspicious draft next to a known-human one: the comparison is more informative than any single score, because both texts pass through the identical calculation.</p>
+
+  <div class="grid grid-2" id="slots" style="margin-top:22px"></div>
+
+  <div class="btn-row" style="margin-top:16px">
+    <button class="btn btn-primary btn-lg" id="go">Compare texts</button>
+    <button class="btn btn-lg" id="add">+ Add a text</button>
+    <button class="btn btn-lg btn-ghost" id="loadsamples">Load two samples</button>
+  </div>
+
+  <div id="out" style="margin-top:26px"></div>
+  <div style="height:40px"></div>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-bottom" style="border-top:0;margin-top:0">
+      <span>© <span id="yr"></span> TellTale. Zero dependencies, one Node process, no telemetry.</span>
+      <span>Detection is probabilistic. Use it wisely.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/compare.js"></script>
+</body>
+</html>

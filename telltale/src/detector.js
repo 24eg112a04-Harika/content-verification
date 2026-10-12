@@ -1,0 +1,1035 @@
+'use strict';
+/**
+ * TellTale detection engine.
+ *
+ * A transparent stylometric estimator. It does NOT ask a model "did you write
+ * this?" and it does not read hidden watermarks. It measures 14 surface
+ * features of the text (rhythm, lexical register, tell-tale phrasing, casual
+ * imperfection) and blends them into a 0-100 AI-likelihood score, with a
+ * per-signal breakdown and a per-sentence heatmap so every point of the score
+ * can be traced back to evidence in the text.
+ */
+
+const LEX = require('./lexicons');
+
+const ENGINE_VERSION = '1.1.0';
+
+/* ------------------------------------------------------------------ utils */
+
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const round = (x, n = 2) => { const f = 10 ** n; return Math.round(x * f) / f; };
+const sum = (a) => a.reduce((s, v) => s + v, 0);
+const mean = (a) => (a.length ? sum(a) / a.length : 0);
+const stdev = (a) => {
+  if (a.length < 2) return 0;
+  const m = mean(a);
+  return Math.sqrt(sum(a.map((v) => (v - m) ** 2)) / (a.length - 1));
+};
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const PHRASE_RE_CACHE = new Map();
+function phraseRegex(phrase) {
+  if (!PHRASE_RE_CACHE.has(phrase)) {
+    const body = esc(phrase).replace(/\\?\s+/g, '[\\s\u2019\']+');
+    PHRASE_RE_CACHE.set(phrase, new RegExp(`(?<![\\w'\-])${body}(?![\\w'\-])`, 'gi'));
+  }
+  return PHRASE_RE_CACHE.get(phrase);
+}
+const countPhrase = (text, phrase) => (text.match(phraseRegex(phrase)) || []).length;
+const countToken = (tokens, word) => tokens.reduce((n, t) => n + (t === word ? 1 : 0), 0);
+
+/* ------------------------------------------------------- text preparation */
+
+/** Undo hard-wrapped lines (email/PDF paste) but keep real paragraph breaks. */
+function normalizeText(raw) {
+  let t = String(raw == null ? '' : raw).replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ');
+  t = t.replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"');
+  t = t.replace(/([^\n])\n(?=(?!\s*(?:[-*•>]|\d+[.)]))[a-z(])/g, '$1 ');
+  return t.replace(/[ \t]+/g, (m) => (m.includes('\t') ? ' ' : m)).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const isEnder = (c) => c === '.' || c === '!' || c === '?' || c === '\u2026';
+
+/** Split text into ordered segments: prose sentences, whitespace, newlines. */
+function segment(text) {
+  const segs = [];
+  const pushWhitespaceSplit = (buf) => {
+    if (!buf) return;
+    const m = buf.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    if (m[1]) segs.push({ kind: 'space', text: m[1] });
+    if (m[2]) segs.push({ kind: 'sentence', text: m[2] });
+    if (m[3]) segs.push({ kind: 'space', text: m[3] });
+  };
+  let buf = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (isEnder(c)) {
+      let j = i;
+      while (j < text.length && (isEnder(text[j]) || /["')\]]/.test(text[j]))) j++;
+      const next = text[j];
+      const prev = text[i - 1] || '';
+      const isDecimal = /\d/.test(prev) && /\d/.test(next || '');
+      const tail = buf.trim().split(/\s+/).pop() || '';
+      const tailClean = tail.replace(/[^\w.]/g, '').replace(/\./g, '');
+      const isAbbrev = LEX.ABBREVIATIONS.has(tailClean.toLowerCase()) ||
+        /^[A-Za-z]$/.test(tailClean) || /^([A-Za-z]\.){1,3}[A-Za-z]?$/.test(tail);
+      if (!isDecimal && !isAbbrev && (next === undefined || /\s/.test(next))) {
+        buf += text.slice(i, j);
+        pushWhitespaceSplit(buf);
+        buf = '';
+        i = j;
+        continue;
+      }
+      buf += text.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (c === '\n') {
+      pushWhitespaceSplit(buf);
+      buf = '';
+      segs.push({ kind: 'break', text: '\n' });
+      i++;
+      continue;
+    }
+    buf += c;
+    i++;
+  }
+  pushWhitespaceSplit(buf);
+  return segs;
+}
+
+const tokenize = (s) => (s.toLowerCase().match(/[a-z0-9]+(?:['\u2019][a-z]+)?/g) || []);
+
+/* ------------------------------------------------------ register profiles */
+/**
+ * A single global scale punishes formal writing. Each profile rescales the
+ * signals that legitimately read differently in that register, so "academic"
+ * stops punishing vocabulary an academic paper is supposed to have, while
+ * still fully counting the phrasing that no register explains away.
+ *
+ * quality: 'measured'   — profile chosen automatically from measured markers
+ *          'inferred'   — best guess from one measured marker
+ *          'assumed'    — writer picked it; no evidence, stated as such
+ *          'plain'      — no profile active (universal signals only)
+ */
+const REGISTERS = {
+  plain: {
+    id: 'plain', label: 'General', blurb: 'No profile. Every signal counts exactly as measured.',
+    quality: 'plain', qualityNote: 'Universal scoring — nothing is being discounted.',
+    weights: {}, formalDensityShift: 0, markerRelax: 0, profileSignals: []
+  },
+  academic: {
+    id: 'academic', label: 'Academic / scholarly',
+    blurb: 'Formal-register vocabulary and scholarly connectors are expected here, so they are discounted. Rhythm, stock phrasing and voice still count in full.',
+    weights: { formalVocab: 0.45, emDash: 0.85, longWords: 0.65 },
+    formalDensityShift: -2.6, markerRelax: 0.64, profileSignals: ['formalVocab']
+  },
+  legal: {
+    id: 'legal', label: 'Legal / policy',
+    blurb: 'Boilerplate and formality are the genre. Vocabulary signals are heavily discounted; rhythm and voice are not.',
+    weights: { formalVocab: 0.30, longWords: 0.6, emDash: 0.8 },
+    formalDensityShift: -3.4, markerRelax: 0.72, profileSignals: ['formalVocab']
+  },
+  technical: {
+    id: 'technical', label: 'Technical / documentation',
+    blurb: 'Reference prose is flat and impersonal by design. Rhythm and vocabulary signals are relaxed; stock marketing phrasing is not.',
+    weights: { formalVocab: 0.6, burstiness: 0.85, lengthBand: 0.75, longWords: 0.6, markers: 0.92 },
+    formalDensityShift: -2.0, markerRelax: 0.6, profileSignals: ['formalVocab']
+  },
+  journalistic: {
+    id: 'journalistic', label: 'Journalistic / reportage',
+    blurb: 'Clarity and plain style are the norm, so formal register counts normally — but headline-ish stock phrases are discounted.',
+    weights: { formalVocab: 0.8, markers: 0.86 },
+    formalDensityShift: -1.0, markerRelax: 0.5, profileSignals: []
+  },
+  personal: {
+    id: 'personal', label: 'Personal / informal',
+    blurb: 'Promotional vocabulary is extra suspicious in a casual message, so the phrase watchlist is weighted up.',
+    weights: { markers: 1.18, formalVocab: 1.1 },
+    formalDensityShift: 0.6, markerRelax: -0.25, profileSignals: []
+  }
+};
+
+const REGISTER_ORDER = ['plain', 'academic', 'legal', 'technical', 'journalistic', 'personal'];
+
+const REGISTER_MARKERS = {
+  academic: ['hypothesis', 'empirical', 'literature', 'methodology', 'participants', 'findings',
+    'study', 'studies', 'analysis', 'data', 'results', 'survey', 'sample', 'experiment',
+    'theoretical', 'framework', 'correlation', 'statistical', 'qualitative', 'quantitative',
+    'research', 'journal', 'peer', 'citation', 'reference', 'figure', 'table', 'appendix',
+    'et al', 'doi', 'abstract', 'conclusion', 'discussion', 'prior work', 'we find', 'we argue',
+    'in this paper', 'in this study', 'our findings', 'the data', 'significance'],
+  legal: ['shall', 'hereby', 'herein', 'pursuant', 'thereof', 'thereto', 'therein', 'pursuant to',
+    'indemnify', 'indemnity', 'liability', 'clause', 'clauses', 'statute', 'jurisdiction',
+    'party', 'parties', 'agreement', 'termination', 'provision', 'provisions', 'warranty',
+    'obligations', 'hereunder', 'whereas', 'notwithstanding', 'in witness', 'force majeure',
+    'without prejudice', 'governing law', 'breach'],
+  technical: ['api', 'endpoint', 'endpoints', 'config', 'configuration', 'server', 'servers',
+    'database', 'deployment', 'repository', 'function', 'functions', 'parameter', 'parameters',
+    'install', 'installation', 'runtime', 'latency', 'token', 'tokens', 'schema', 'library',
+    'dependencies', 'command', 'terminal', 'http', 'json', 'request', 'response', 'error',
+    'logging', 'cache', 'queue', 'thread', 'memory', 'version', 'default', 'syntax', 'script'],
+  journalistic: ['reported', 'reportedly', 'according to', 'spokesperson', 'officials', 'sources',
+    'said', 'told', 'confirmed', 'announced', 'spokesman', 'spokeswoman', 'press', 'briefing',
+    'correspondent', 'bureau', 'byline', 'the times', 'reuters', 'associated press', 'monday',
+    'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'court', 'police']
+};
+
+const CONTRACTION_RATE_RE = /\b(?:[a-z]+['\u2019](?:s|t|re|ve|ll|d|m)|gonna|wanna|gotta|ain['\u2019]t)\b/gi;
+// Terms that show up in ordinary prose too. They still hint at a genre, but they
+// must not carry the same weight as distinctive vocabulary ("indemnify", "endpoint").
+const AMBIGUOUS_MARKERS = new Set(['study', 'studies', 'data', 'results', 'sample', 'analysis',
+  'survey', 'table', 'figure', 'reference', 'conclusion', 'discussion', 'abstract', 'research',
+  'framework', 'significant', 'version', 'error', 'request', 'response', 'command', 'default',
+  'memory', 'function', 'functions', 'script', 'library', 'press', 'court', 'police', 'said',
+  'told', 'party', 'parties', 'agreement', 'provision', 'provisions', 'termination', 'breach',
+  'report', 'sources', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+  'install', 'installation', 'terminal', 'http', 'json']);
+const AMBIGUOUS_WEIGHT = 0.35;
+
+const MESSAGE_ARTIFACTS = ['http', 'www.', '@', 'cheers', 'regards', 'best,', 'thanks,', 'sent from',
+  'on my iphone', 'p.s.', 'ps:', 'unsubscribe'];
+
+function detectRegister(text) {
+  const lower = ` ${text.toLowerCase()} `;
+  const words = (text.match(/[A-Za-z0-9']+/g) || []).length || 1;
+  const per100 = (n) => (n / words) * 100;
+  const scoreLexicon = (list) => {
+    let hits = 0, strong = 0, matched = [];
+    for (const term of list) {
+      const re = new RegExp(`(?<![\\w'-])${term.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}(?![\\w'-])`, 'gi');
+      const n = (lower.match(re) || []).length;
+      if (n) {
+        const w = AMBIGUOUS_MARKERS.has(term) ? AMBIGUOUS_WEIGHT : 1;
+        hits += n * w;
+        if (w === 1) strong += n;
+        matched.push(term);
+      }
+    }
+    return { hits, strong, matched };
+  };
+
+  const lex = {};
+  for (const id of Object.keys(REGISTER_MARKERS)) lex[id] = scoreLexicon(REGISTER_MARKERS[id]);
+
+  const sentences = text.split(/(?<=[.!?])\s+/).map((x) => x.trim()).filter((x) => x.length > 0);
+  const sentenceCount = Math.max(1, sentences.length);
+  const firstP = (lower.match(/(?<![\w'-])(?:i|me|my|mine|we|us|our|ours)(?![\w'-])/g) || []).length;
+  const firstPersonRate = per100(firstP);
+  const contractions = (text.match(CONTRACTION_RATE_RE) || []).length;
+  const contractionRate = per100(contractions);
+  const artifacts = MESSAGE_ARTIFACTS.reduce((n, a) => n + (lower.split(a).length - 1), 0);
+  const hasStructure = /(^|\n)\s*(?:[-*•]|\d+[.)])\s+/.test(text);
+  const numerals = (text.match(/\b\d[\d,.]*\b/g) || []).length;
+  const dates = (text.match(/\b(?:19|20)\d{2}\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g) || []).length;
+  const technicalFacts = (text.match(/\b\d+(?:\.\d+)+\b|`[^`]+`|\b[a-z]+_[a-z_]+\b|\b[A-Z]{2,}\b/g) || []).length;
+  const strongCaps = (text.match(/\b(?:IMPORTANT|NOTE|WARNING|ERROR|TODO|DOCTYPE|NULL)\b/g) || []).length;
+
+  const scores = {};
+  scores.academic = 1.4 * per100(lex.academic.hits);
+  scores.legal = 1.55 * per100(lex.legal.hits);
+  scores.technical = 1.25 * per100(lex.technical.hits) + (hasStructure ? 0.8 : 0) + 0.22 * technicalFacts + 0.22 * strongCaps * 2;
+  scores.journalistic = 1.15 * per100(lex.journalistic.hits) + (dates >= 2 ? 0.7 : 0);
+  scores.personal = 1.35 * clamp((firstPersonRate - 2.5) / 5)
+    + 1.1 * clamp(contractionRate / 3.4)
+    + (artifacts ? 0.9 : 0)
+    - (dates + technicalFacts >= 2 ? 0.35 : 0);
+
+  const candidate = Object.entries(scores)
+    .map(([id, value]) => ({ id, value }))
+    .sort((a, b) => b.value - a.value)[0];
+
+  const PLAIN = { id: 'plain', label: 'General', quality: 'plain', confidencePct: 0,
+    evidence: [], reason: 'No register-specific vocabulary detected; universal scoring applies.',
+    margins: null, profile: REGISTERS.plain };
+
+  const candidateStrong = (lex[candidate.id] || { strong: 0 }).strong;
+  if (candidate.value >= 2.4 && candidateStrong >= 1) {
+    const second = Object.entries(scores).filter(([id]) => id !== candidate.id)
+      .sort((a, b) => b[1] - a[1])[0];
+    const margin = candidate.value - second[1];
+    const strong = candidate.value >= 4.6 && margin >= 1.4;
+    return {
+      id: candidate.id, label: REGISTERS[candidate.id].label,
+      quality: strong ? 'measured' : 'inferred',
+      confidencePct: Math.min(92, Math.round(40 + candidate.value * 6 + margin * 5)),
+      evidence: (lex[candidate.id] || { matched: [] }).matched.slice(0, 6),
+      reason: `Genre markers found: ${(lex[candidate.id] || { matched: [] }).matched.slice(0, 4).join(', ')}.`,
+      margins: { top: Math.round(candidate.value * 10) / 10, second: Math.round(second[1] * 10) / 10,
+        runnerUp: second[0] },
+      profile: REGISTERS[candidate.id]
+    };
+  }
+  if (candidate.value >= 1.4) {
+    return {
+      id: candidate.id, label: REGISTERS[candidate.id].label, quality: 'weak',
+      confidencePct: Math.round(15 + candidate.value * 8),
+      evidence: (lex[candidate.id] || { matched: [] }).matched.slice(0, 4),
+      reason: `Only a single weak ${candidate.id} marker found — treating this cautiously.`,
+      margins: { top: Math.round(candidate.value * 10) / 10, second: null, runnerUp: null },
+      profile: REGISTERS[candidate.id]
+    };
+  }
+  return PLAIN;
+}
+
+/* ------------------------------------------------------- signal machinery */
+
+/**
+ * Every signal returns aiScore in [0,1]: how AI-leaning its measurement is.
+ * weight is the signal's vote in the final blend (absent data -> excluded).
+ */
+const SIGNAL_DEFS = [
+  {
+    id: 'burstiness',
+    profiles: ['academic', 'legal', 'technical', 'journalistic', 'personal'], name: 'Sentence-length variance', group: 'Rhythm', weight: 2.6,
+    about: 'Human writers swing between 4-word jabs and 40-word runs. Machines cluster near an average. This is the single strongest signal in the mix.',
+    measure: (c) => c.len.cv,
+    fmt: (v) => `coefficient of variation ${round(v, 2)}`,
+    score: (v) => clamp((0.62 - v) / (0.62 - 0.26)),
+    detail: 'Low variance (below ~0.35) reads mechanical; above ~0.60 reads human.'
+  },
+  {
+    id: 'lengthBand',
+    profiles: ['academic', 'legal', 'technical', 'journalistic', 'personal'], name: 'Sentences bunched near average', group: 'Rhythm', weight: 1.0,
+    about: 'Share of sentences within ±20% of the document\'s average length. Generated text tends to keep hitting the same comfortable size.',
+    measure: (c) => c.len.inBand,
+    fmt: (v) => `${Math.round(v * 100)}% of sentences within ±20% of average length`,
+    // Only counts as human evidence when the *overall* rhythm actually varies:
+    score: (v, c) => clamp((v - 0.45) / (0.78 - 0.45)) * clamp((c.len.cv - 0.22) / 0.4),
+    detail: 'Documents where most sentences are the same size are suspiciously even.'
+  },
+  {
+    id: 'paraUniformity',
+    profiles: ['academic', 'legal', 'technical', 'journalistic'], name: 'Even paragraph lengths', group: 'Rhythm', weight: 0.7,
+    about: 'Human paragraphs sprawl unevenly. Generated ones often land in the same word count range paragraph after paragraph.',
+    measure: (c) => (c.paraLens.length >= 3 ? c.paraCv : null),
+    fmt: (v) => (v === null ? 'not enough paragraphs' : `paragraph length variation ${round(v, 2)}`),
+    score: (v) => (v === null ? 0 : clamp((1.1 - v) / (1.1 - 0.45))),
+    detail: 'Needs at least 3 paragraphs to say anything.'
+  },
+  {
+    id: 'markers',
+    profiles: ['academic', 'legal', 'technical', 'journalistic', 'personal'], name: 'Stock "LLM voice" phrases', group: 'Vocabulary', weight: 3.4,
+    about: 'A curated list of ~150 phrases that machine prose over-uses: "delve into", "rich tapestry", "it\'s important to note", "cutting-edge", "moreover".',
+    measure: (c) => (c.markerDensityApplied !== undefined ? c.markerDensityApplied : c.markerDensity),
+    fmt: (v) => `${round(v, 2)} weighted tell-tale phrasing per 100 words`,
+    score: (v, c) => clamp(((c.markerDensityApplied !== undefined ? c.markerDensityApplied : c.markerDensity) - 0.25) / 3.4),
+    detail: 'Occasional use is normal. A steady drip every sentence is not.'
+  },
+  {
+    id: 'discourse',
+    profiles: ['academic', 'legal', 'technical', 'journalistic', 'personal'], name: 'Transitional sentence openers', group: 'Vocabulary', weight: 1.8,
+    about: 'How many sentences start with "However,", "Furthermore,", "Additionally," and friends. Machines scaffold arguments with them constantly.',
+    measure: (c) => c.discourseOpenRate,
+    fmt: (v) => `${Math.round(v * 100)}% of sentences open with a discourse marker`,
+    score: (v) => clamp((v - 0.08) / (0.35 - 0.08)),
+    detail: 'Typical human writing: 5-15%. Generated essays often exceed 30%.'
+  },
+  {
+    id: 'openerRepeats',
+    profiles: ['academic', 'legal', 'technical', 'journalistic'], name: 'Recycled sentence openers', group: 'Rhythm', weight: 1.0,
+    about: 'How often a sentence starts with a word that already opened an earlier sentence ("The ... The ... The ...").',
+    measure: (c) => c.openerRepeatRate,
+    fmt: (v) => `${Math.round(v * 100)}% of sentences reuse an earlier opener`,
+    score: (v) => clamp((v - 0.18) / (0.5 - 0.18)),
+    detail: 'Repetition is normal up to a point; heavy reuse reads templated.'
+  },
+  {
+    id: 'determinerOpeners',
+    profiles: ['academic', 'legal', 'technical', 'journalistic'], name: 'Determiner-heavy openers', group: 'Rhythm', weight: 0.5,
+    about: 'Share of sentences beginning with The / This / These / It / There — a default, low-variety way to start a sentence.',
+    measure: (c) => c.determinerOpenRate,
+    fmt: (v) => `${Math.round(v * 100)}% of sentences start with a determiner`,
+    score: (v) => clamp((v - 0.28) / (0.55 - 0.28)),
+    detail: 'Weak signal on its own; useful in combination.'
+  },
+  {
+    id: 'emDash',
+    profiles: ['academic', 'legal', 'technical', 'journalistic'], name: 'Em-dash habit', group: 'Punctuation', weight: 0.9,
+    about: 'Frequency of "—" per 100 words. Model output leans on em dashes heavily, and many people never type one.',
+    measure: (c) => c.emDashDensity,
+    fmt: (v) => `${round(v, 2)} em dashes per 100 words`,
+    score: (v) => clamp((v - 0.18) / 1.9),
+    detail: 'A famous stylistic tell, but plenty of humans love em dashes too — hence the modest weight.'
+  },
+  {
+    id: 'formalVocab',
+    profiles: ['academic', 'legal', 'technical', 'journalistic', 'personal'], name: 'Formal / academic register', group: 'Vocabulary', weight: 1.3,
+    about: 'Density of words like "utilize", "comprehensive", "methodology", "subsequently" — corporate-academic vocabulary.',
+    measure: (c) => (c.formalDensityAdjusted !== undefined ? c.formalDensityAdjusted : c.formalDensity),
+    fmt: (v) => `${round(v, 2)} formal-register words per 100 words`,
+    score: (v) => clamp((v - 1.6) / 5.5),
+    detail: 'Normal in legal or scientific text — the confidence note will say so.'
+  },
+  {
+    id: 'contractions',
+    profiles: ['personal'], name: 'Contractions', group: 'Voice', weight: 1.0,
+    about: 'don\'t, it\'s, we\'re, can\'t. People use them; careful machine prose often doesn\'t.',
+    measure: (c) => c.contractionDensity,
+    fmt: (v) => `${round(v, 2)} contractions per 100 words`,
+    score: (v) => 1 - clamp(v / 3.0),
+    detail: 'A human-leaning signal. Formal human writing scores low here too, so it never decides the verdict alone.'
+  },
+  {
+    id: 'voice',
+    profiles: ['academic', 'legal', 'technical', 'journalistic'], name: 'Personal voice & concrete specifics', group: 'Voice', weight: 1.3,
+    about: 'First-person pronouns, numbers, dates and proper nouns — the fingerprints of someone writing from their own life.',
+    measure: (c) => c.voiceRichness,
+    fmt: (v) => `${round(v, 2)} personal/specificity markers per 100 words`,
+    score: (v) => 1 - clamp(v / 2.6),
+    detail: 'Generic prose with no I, no numbers and no names is a machine-ish habit.'
+  },
+  {
+    id: 'questions',
+    profiles: ['personal'], name: 'Questions & exclamations', group: 'Voice', weight: 0.5,
+    about: 'How often the text asks something or gets excited. Generated reference prose rarely does.',
+    measure: (c) => c.qeDensity,
+    fmt: (v) => `${round(v, 2)} per 100 words`,
+    score: (v) => 1 - clamp(v / 1.2),
+    detail: 'Absence is weak evidence, presence is good evidence of a human.'
+  },
+  {
+    id: 'imperfections',
+    profiles: ['personal'], name: 'Casual imperfections', group: 'Voice', weight: 1.2,
+    about: 'Lowercase sentence starts, "dont"/"im", repeated punctuation, ellipses, emoji, double spaces — the mess humans make.',
+    measure: (c) => c.imperfectionScore,
+    fmt: (v) => `${round(v, 2)} imperfection markers per 100 words`,
+    score: (v) => 1 - clamp(v / 2.2),
+    detail: 'Polished to the point of sterility is itself a signal.'
+  },
+  {
+    id: 'longWords',
+    profiles: ['academic', 'legal', 'technical', 'journalistic'], name: 'Long-word ratio', group: 'Vocabulary', weight: 0.5,
+    about: 'Share of words 9+ characters long. Very low or very high with no variation in sentence shape hints at generated register.',
+    measure: (c) => c.longWordRatio,
+    fmt: (v) => `${Math.round(v * 100)}% of words are 9+ characters`,
+    score: (v) => clamp((v - 0.10) / 0.12),
+    detail: 'A soft, noisy signal. Included for completeness.'
+  }
+];
+
+/* --------------------------------------------------------------- analysis */
+
+function collectContext(text) {
+  const segs = segment(text);
+  const sentences = segs.filter((s) => s.kind === 'sentence');
+  const proseSentences = sentences.filter((s) => /[A-Za-z]/.test(s.text));
+
+  for (const s of proseSentences) {
+    s.lower = s.text.toLowerCase();
+    s.tokens = tokenize(s.text);
+    s.wordCount = s.tokens.length;
+    s.first = s.lower.trim().split(/\s+/)[0] || '';
+  }
+  const scored = proseSentences.filter((s) => s.wordCount > 0);
+
+  const wordList = proseSentences.flatMap((s) => s.tokens);
+  const allWords = tokenize(text);
+  const unique = new Set(allWords);
+  const sentencesWithWords = scored.filter((s) => s.wordCount > 0);
+  const lens = sentencesWithWords.map((s) => s.wordCount);
+  const lenMean = mean(lens);
+  const lenSd = stdev(lens);
+  const lenCv = lenMean ? lenSd / lenMean : 0;
+  const inBand = lens.length
+    ? lens.filter((n) => Math.abs(n - lenMean) <= 0.22 * lenMean).length / lens.length
+    : 0;
+
+  const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter((p) => p.length > 0);
+  const paraLens = paragraphs.map((p) => tokenize(p).length);
+  const paraCv = paraLens.length >= 2 && mean(paraLens) ? stdev(paraLens) / mean(paraLens) : null;
+
+  const per100 = (n) => (allWords.length ? (n / allWords.length) * 100 : 0);
+  const lower = text.toLowerCase();
+
+  // ---- tell-tale phrases
+  const markerHits = [];
+  let markerWeighted = 0;
+  for (const [phrase, w, registers] of LEX.MARKER_PHRASES) {
+    const n = countPhrase(text, phrase);
+    if (n > 0) {
+      markerHits.push({ phrase, count: n, weight: w, registers: registers || null });
+      markerWeighted += n * w;
+    }
+  }
+  markerHits.sort((a, b) => b.count * b.weight - a.count * a.weight);
+
+  // ---- formal vocabulary
+  const formalHits = [];
+  let formalCount = 0;
+  for (const w of LEX.FORMAL_WORDS) {
+    const n = countToken(allWords, w);
+    if (n > 0) { formalHits.push({ word: w, count: n }); formalCount += n; }
+  }
+  formalHits.sort((a, b) => b.count - a.count);
+
+  // ---- discourse openers
+  const discourseHits = [];
+  let discourseOpen = 0;
+  for (const s of sentencesWithWords) {
+    const head = s.lower.slice(0, 40);
+    const hit = LEX.DISCOURSE_OPENERS.find((d) => head.startsWith(d + ' ') || head.startsWith(d + ','));
+    const determinerHit = LEX.DETERMINER_OPENERS.includes(s.first);
+    if (hit) { discourseOpen++; discourseHits.push({ opener: hit, count: 1 }); }
+    s.openerLean = hit || determinerHit ? 1 : 0;
+    s.openerKind = hit ? 'discourse' : determinerHit ? 'determiner' : 'other';
+  }
+  const discourseMerged = Object.values(discourseHits.reduce((acc, h) => {
+    acc[h.opener] = acc[h.opener] || { opener: h.opener, count: 0 };
+    acc[h.opener].count++;
+    return acc;
+  }, {})).sort((a, b) => b.count - a.count);
+
+  const openerCounts = {};
+  let openerRepeat = 0;
+  for (const s of sentencesWithWords) {
+    if (s.first && openerCounts[s.first]) openerRepeat++;
+    openerCounts[s.first] = (openerCounts[s.first] || 0) + 1;
+  }
+
+  const emDashes = (text.match(/\u2014|\u2013|--/g) || []).length;
+  const contractions = (text.match(LEX.CONTRACTION_RE) || []).length;
+  const contractionList = [...new Set((text.match(LEX.CONTRACTION_RE) || []).map((c) => c.toLowerCase()))];
+
+  const casualStrong = LEX.CASUAL_STRONG.filter((c) => countPhrase(lower, c) > 0);
+  const casualSoft = LEX.CASUAL_SOFT.filter((c) => countPhrase(lower, c) > 0);
+  const casualCount = sum(casualStrong.map((c) => countPhrase(lower, c) * 2))
+    + sum(casualSoft.map((c) => countPhrase(lower, c)));
+  const firstPersonCount = allWords.filter((w) => LEX.FIRST_PERSON.includes(w)).length;
+  const digitTokens = (text.match(/\b\d[\d,.]*\b/g) || []).length;
+  const properNouns = (text.match(/(?<![.!?]\s)(?<![,;:(\["']\s)\b[A-Z][a-z]{2,}/g) || [])
+    .filter((w) => !/^(The|This|These|Those|It|There|Their|And|But|However|Moreover|Furthermore|Additionally|In|On|For|With|As|At|By|To|From|That|When|While|Many|Most|Some|Human|People|Content|Text|Writing|Language|Overall|Ultimately|Finally|First|Second|Third)$/.test(w)).length;
+  const voiceRichness = per100(firstPersonCount + digitTokens + Math.min(properNouns, 12));
+
+  const questions = (proseSentences.filter((s) => /\?/.test(s.text)).length);
+  const exclaims = (proseSentences.filter((s) => /!/.test(s.text)).length);
+  const qeDensity = per100(questions + exclaims);
+
+  const emojiCount = (text.match(LEX.EMOJI_GLOBAL_RE) || []).length;
+  const lowercaseStarts = sentencesWithWords.filter((s) => /^[a-z]/.test(s.text.trim())).length;
+  const repeatedPunct = (text.match(/[!?.,]{2,}|\.\.\.+/g) || []).length;
+  const missingApos = LEX.MISSING_APOSTROPHE.reduce((n, m) => n + countPhrase(lower, m), 0);
+  const doubleSpaces = (text.match(/ {2,}/g) || []).length;
+  const imperfectionRaw = lowercaseStarts * 0.7 + repeatedPunct * 0.7 + missingApos * 0.7
+    + doubleSpaces * 0.5 + emojiCount * 2.5;
+  const imperfectionScore = per100(imperfectionRaw);
+
+  const longWordRatio = allWords.length ? allWords.filter((w) => w.length >= 9).length / allWords.length : 0;
+
+  const ctx = {
+    text, segs, sentences: sentencesWithWords, allWords, unique,
+    paraLens, paraCv, per100,
+    len: { mean: lenMean, sd: lenSd, cv: lenCv, inBand, max: lens.length ? Math.max(...lens) : 0, min: lens.length ? Math.min(...lens) : 0 },
+    markerHits, markerWeighted,
+    markerCount: markerHits.reduce((n, m) => n + m.count, 0),
+    markerDensity: per100(markerWeighted),
+    markerCountDensity: per100(markerHits.reduce((n, m) => n + m.count, 0)),
+    formalHits, formalDensity: per100(formalCount),
+    discourseHits: discourseMerged, discourseOpenRate: sentencesWithWords.length ? discourseOpen / sentencesWithWords.length : 0,
+    openerRepeatRate: sentencesWithWords.length ? openerRepeat / sentencesWithWords.length : 0,
+    determinerOpenRate: sentencesWithWords.length ? sentencesWithWords.filter((s) => s.openerKind === 'determiner').length / sentencesWithWords.length : 0,
+    emDashDensity: per100(emDashes), emDashes,
+    contractions, contractionDensity: per100(contractions), contractionList,
+    casualStrong, casualSoft, casualCount,
+    firstPersonCount, digitTokens, properNouns, voiceRichness,
+    questions, exclaims, qeDensity,
+    emojiCount, lowercaseStarts, repeatedPunct, missingApos, doubleSpaces,
+    imperfectionScore, longWordRatio,
+    paragraphs
+  };
+  return ctx;
+}
+
+function scoreSentences(ctx) {
+  const c = ctx;
+  const out = [];
+  for (const s of c.sentences) {
+    const words = s.wordCount;
+    if (words < 5) {
+      s.score = null; s.band = 'short';
+      s.reasons = ['Too short to score on its own'];
+      out.push(s); continue;
+    }
+    const lenRel = Math.abs(words - c.len.mean) / Math.max(c.len.mean, 1);
+    const lengthLean = clamp(1 - lenRel / 0.6);
+    let markerCount = 0;
+    const markerFound = [];
+    for (const [phrase, w] of LEX.MARKER_PHRASES) {
+      const n = countPhrase(s.text, phrase);
+      if (n > 0) { markerCount += n * w; markerFound.push(phrase); }
+    }
+    const markerLean = clamp(markerCount / 2.5);
+    const formalHits = s.tokens.filter((t) => LEX.FORMAL_WORDS.includes(t)).length;
+    const formalLean = clamp(formalHits / 2);
+
+    let ai = 0.40 * lengthLean + 0.26 * markerLean + 0.18 * (s.openerLean || 0) + 0.16 * formalLean;
+
+    const human = [];
+    const ct = (s.text.match(LEX.CONTRACTION_RE) || []).length;
+    if (ct) human.push(`${ct} contraction${ct > 1 ? 's' : ''}`);
+    const casual = [...LEX.CASUAL_STRONG, ...LEX.CASUAL_SOFT].filter((x) => countPhrase(s.lower, x) > 0);
+    if (casual.length) human.push(`casual wording (${casual.slice(0, 2).join(', ')})`);
+    if (s.tokens.some((t) => LEX.FIRST_PERSON.includes(t))) human.push('first-person voice');
+    if (/[!?]/.test(s.text)) human.push('question or exclamation');
+    if (LEX.EMOJI_RE.test(s.text)) human.push('emoji');
+    if (/\b\d[\d,.]*\b/.test(s.text)) human.push('a concrete number');
+    if (human.length) ai = Math.max(0, ai * 0.55 - 0.07 - 0.04 * human.length);
+
+    s.score = round(clamp(ai), 3);
+    s.band = s.score > 0.62 ? 'elevated' : s.score > 0.38 ? 'neutral' : 'human';
+    s.humanMarkers = human;
+    s.markerFound = markerFound;
+
+    const reasons = [];
+    if (lengthLean > 0.65) reasons.push(`${words} words, right at the document average of ${Math.round(c.len.mean)} — no length variation`);
+    else if (lenRel > 0.5) reasons.push(`unusually ${words > c.len.mean ? 'long' : 'short'} at ${words} words`);
+    if (markerFound.length) reasons.push(`stock phrases: ${markerFound.slice(0, 3).join(', ')}`);
+    if (s.openerKind === 'discourse') reasons.push(`opens with a textbook transition ("${s.first}")`);
+    else if (s.openerKind === 'determiner') reasons.push(`generic opener ("${s.first}")`);
+    if (formalHits >= 2) reasons.push(`${formalHits} formal-register words`);
+    if (human.length) reasons.push(`human markers: ${human.slice(0, 3).join(', ')}`);
+    if (!reasons.length) reasons.push('no strong signals either way');
+    s.reasons = reasons.slice(0, 3);
+    out.push(s);
+  }
+  return out;
+}
+
+function buildSpans(sentences, kind) {
+  const spans = [];
+  let run = [];
+  const flush = () => {
+    if (run.length) {
+      const text = run.map((s) => s.text.trim()).join(' ');
+      const score = mean(run.map((s) => s.score));
+      const reasons = [...new Set(run.flatMap((s) => s.markerFound || []))].slice(0, 4);
+      if (kind === 'human') {
+        spans.push({ text, score: round(1 - score, 3), reasons: [...new Set(run.flatMap((s) => s.humanMarkers || []))].slice(0, 3) });
+      } else {
+        spans.push({ text, score: round(score, 3), reasons, words: run.reduce((n, s) => n + s.wordCount, 0) });
+      }
+    }
+    run = [];
+  };
+  for (const s of sentences) {
+    if (s.score === null) { flush(); continue; }
+    const qualifies = kind === 'ai'
+      ? s.band === 'elevated'
+      : (s.band === 'human' && (s.humanMarkers || []).length > 0);
+    if (qualifies) {
+      run.push(s);
+      if (run.length >= 3) flush();
+    } else flush();
+  }
+  flush();
+  return spans.sort((a, b) => b.score - a.score).slice(0, 3);
+}
+
+function buildRecommendations(ctx, stats, register, paragraphs) {
+  const recs = [];
+  const c = ctx;
+  if (c.markerHits.length) {
+    const top = c.markerHits.slice(0, 4).map((m) => `"${m.phrase}"${m.count > 1 ? ` ×${m.count}` : ''}`);
+    recs.push({
+      id: 'markers', severity: c.markerDensity > 1.6 ? 'high' : 'medium',
+      title: `Strip ${c.markerHits.reduce((n, m) => n + m.count, 0)} stock phrase(s)`,
+      detail: `Found ${top.join(', ')}. These are the phrases most associated with machine prose. Often the sentence is stronger with the phrase deleted outright.`
+    });
+  }
+  if (c.len.cv < 0.42) {
+    recs.push({
+      id: 'rhythm', severity: c.len.cv < 0.32 ? 'high' : 'medium',
+      title: 'Break the rhythm',
+      detail: `Sentences average ${Math.round(c.len.mean)} words with a variation of only ${round(c.len.cv, 2)} (human writing usually runs 0.5-0.8). Follow a long, winding sentence with a three-word one. Fragment. Then keep going.`
+    });
+  }
+  if (c.discourseOpenRate > 0.2) {
+    recs.push({
+      id: 'discourse', severity: 'medium',
+      title: 'Cut the scaffolding transitions',
+      detail: `${Math.round(c.discourseOpenRate * 100)}% of sentences open with a discourse marker (${c.discourseHits.slice(0, 3).map((d) => `"${d.opener}"`).join(', ')}). Let the logic carry the connection instead of announcing it.`
+    });
+  }
+  if (c.contractions === 0 && stats.words > 60) {
+    recs.push({
+      id: 'contractions', severity: 'medium', registers: ['personal', 'journalistic', 'plain'],
+      title: 'Use contractions where the register allows',
+      detail: 'Zero contractions detected. "Do not", "it is", "cannot" everywhere reads like documentation. If the piece is conversational, "don\'t", "it\'s" and "can\'t" immediately read more human.'
+    });
+  }
+  if (c.voiceRichness < 1.0 && stats.words > 60) {
+    recs.push({
+      id: 'specifics', severity: 'medium', registers: ['personal', 'journalistic', 'plain'],
+      title: 'Add specifics only you could know',
+      detail: `${c.digitTokens} numeric tokens and ${c.firstPersonCount} first-person pronouns. Names, dates, prices, places and small true details are the hardest thing for a generator to fake convincingly — and the fastest way to read human.`
+    });
+  }
+  if (c.emDashDensity > 0.8) {
+    recs.push({
+      id: 'emdash', severity: 'info',
+      title: 'Thin out the em dashes',
+      detail: `${c.emDashes} em dashes across ${stats.words} words. It is a legitimate punctuation mark, but at this rate it is doing stylistic work people recognise.`
+    });
+  }
+  if (c.formalDensity > 4) {
+    recs.push({
+      id: 'register', severity: 'info', registers: ['plain'],
+      title: 'Dial back the corporate register',
+      detail: `Words like ${c.formalHits.slice(0, 3).map((f) => `"${f.word}"`).join(', ')} appear ${Math.round(c.formalDensity)} times per 100 words. Swap a few for plain English: "use" not "utilize", "build" not "implement".`
+    });
+  }
+  if (paragraphs && paragraphs.mixed) {
+    recs.push({
+      id: 'mixed', severity: 'high',
+      title: 'Mixed authorship detected',
+      detail: `Paragraph scores run from ${paragraphs.min} to ${paragraphs.max} — a ${paragraphs.spread}-point spread. ${paragraphs.machineParagraphs} paragraph(s) carry machine signals while ${paragraphs.humanParagraphs} read human. Read the paragraph table; the document needs to be judged in pieces, not as one score.`
+    });
+  }
+  if (stats.words < 150) {
+    recs.push({
+      id: 'length', severity: 'info',
+      title: 'Score confidence is limited by length',
+      detail: `At ${stats.words} words there simply is not enough signal. Detectors get meaningfully stable past ~150 words and reliable past ~400.`
+    });
+  }
+  if (!recs.length) {
+    recs.push({
+      id: 'clean', severity: 'info',
+      title: 'No obvious machine habits found',
+      detail: 'The rhythm varies, the vocabulary is specific and there are no stock phrases. Nothing to fix here.'
+    });
+  }
+  return recs;
+}
+
+/* ------------------------------------------------- paragraph-level report */
+/**
+ * Long documents are rarely uniformly machine-written: generated intros sit on
+ * top of human bodies, and human drafting gets pasted around generated sections.
+ * Each paragraph is re-run through the full pipeline on its own statistics.
+ */
+function buildParagraphReport(text, sentences, opts) {
+  const paras = text.split(/\n\s*\n/).map((p) => p.trim()).filter((p) => p.length > 0);
+  const pool = sentences.filter((s) => s.wordCount > 0);
+  const report = [];
+  let idx = 0;
+
+  for (const para of paras) {
+    const count = (para.match(/[A-Za-z0-9']+/g) || []).length;
+    const chunk = [];
+    let acc = 0;
+    while (idx < pool.length && acc < para.length) {
+      chunk.push(pool[idx]);
+      acc += pool[idx].text.length + 1;
+      idx++;
+    }
+    const entry = {
+      index: report.length + 1,
+      words: count,
+      sentences: chunk.length,
+      preview: para.replace(/\s+/g, ' ').slice(0, 150),
+      score: null, band: null, verdict: null, topSignals: [], markers: [], flagged: 0
+    };
+    if (count >= 30) {
+      const sub = analyze(para, { _nested: true });
+      if (!sub.error) {
+        entry.score = sub.score;
+        entry.rawScore = sub.rawScore;
+        entry.verdict = sub.verdict.label;
+        entry.confidence = sub.confidence.id;
+        entry.topSignals = sub.topSignals.slice(0, 3).map((x) => ({ name: x.name, display: x.display, aiScore: x.aiScore }));
+        entry.markers = sub.findings.markers.slice(0, 4).map((m) => m.phrase);
+      }
+    }
+    entry.flagged = chunk.filter((s) => s.band === 'elevated').length;
+    entry.sentenceFlags = chunk.map((s) => ({ score: s.score, band: s.band, words: s.wordCount }));
+    report.push(entry);
+  }
+
+  const scored = report.filter((r) => r.score !== null);
+  const scores = scored.map((r) => r.score);
+  const spread = scores.length >= 2 ? Math.max(...scores) - Math.min(...scores) : 0;
+  const meanScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+  const mixed = scores.length >= 2 && spread >= 28;
+  const shape = !scores.length ? 'unscored'
+    : scores.length === 1 ? 'single'
+    : mixed ? 'mixed'
+    : meanScore >= 58 ? 'machine'
+    : meanScore < 40 ? 'human'
+    : 'even';
+
+  return {
+    paragraphs: report,
+    scored: scored.length,
+    mean: meanScore === null ? null : Math.round(meanScore),
+    spread: Math.round(spread),
+    min: scores.length ? Math.min(...scores) : null,
+    max: scores.length ? Math.max(...scores) : null,
+    machineParagraphs: scores.filter((s) => s >= 58).length,
+    humanParagraphs: scores.filter((s) => s < 40).length,
+    mixed,
+    shape
+  };
+}
+
+/* ------------------------------------------------------------- sensitivity */
+/** How far the raw score moves if each signal is withdrawn. Detects fragile scores. */
+function buildSensitivity(signals) {
+  const used = signals.filter((s) => s.applicable);
+  const total = sum(used.map((s) => s.weight));
+  if (!total || used.length < 3) return { items: [], maxImpact: 0 };
+  const full = sum(used.map((x) => x.weight * x.aiScore)) / total * 100;
+  const items = used.map((s) => {
+    const rest = total - s.weight;
+    const without = rest > 0 ? (sum(used.filter((x) => x.id !== s.id).map((x) => x.weight * x.aiScore)) / rest) * 100 : full;
+    return { id: s.id, name: s.name, delta: round(without - full, 1) };
+  }).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)).slice(0, 4);
+  return { items, maxImpact: round(Math.abs(items[0].delta), 1) };
+}
+
+/* --------------------------------------------------------------- verdicts */
+const VERDICTS = [
+  { max: 22, id: 'human', label: 'Likely human-written', blurb: 'The rhythm wanders, the vocabulary is specific, and none of the machine habits showed up. Treat this as human-authored writing.' },
+  { max: 40, id: 'lean_human', label: 'Leans human', blurb: 'Most signals point human. There is some polish and repetition, which could be editing, a formal register, or light AI assistance.' },
+  { max: 58, id: 'mixed', label: 'Inconclusive', blurb: 'The signals disagree or the text is too short. This is the honest answer for a lot of content — including heavily edited human writing and lightly edited machine writing.' },
+  { max: 76, id: 'lean_ai', label: 'Leans AI-generated', blurb: 'Several machine-correlated habits are present in combination: even sentence lengths, stock phrasing, transitions doing the thinking. Suggestive, not proof.' },
+  { max: 101, id: 'ai', label: 'Strong AI signals', blurb: 'The text is saturated with the signatures of generated prose. Still evidence, not a watermark — a human deliberately writing in this style could land here too.' }
+];
+
+function confidenceFor(words, sentences) {
+  if (words < 80 || sentences < 4) return { id: 'low', label: 'Low confidence', factor: 0.55, note: 'Very short sample. Scores shrink toward "inconclusive" on purpose below ~80 words.' };
+  if (words < 180) return { id: 'medium', label: 'Moderate confidence', factor: 0.82, note: 'A paragraph or two is enough to see rhythm and vocabulary patterns, not enough to be confident.' };
+  if (words < 500) return { id: 'high', label: 'High confidence', factor: 1, note: 'Enough text for the rhythm and phrasing signals to stabilise.' };
+  return { id: 'very_high', label: 'Very high confidence', factor: 1, note: 'Long sample: the stylometric signals are stable and the estimate is about as good as this method gets.' };
+}
+
+function analyze(rawText, opts = {}) {
+  const text = normalizeText(rawText);
+  const empty = { error: 'Nothing to analyse — paste at least a sentence of text.' };
+  if (!text || tokenize(text).length === 0) return empty;
+
+  const ctx = collectContext(text);
+  scoreSentences(ctx);   // fills in per-sentence score/band/reasons used by the heatmap
+
+  /* ---------------------------------------------- register resolution */
+  const detected = detectRegister(text);
+  const chosenId = typeof opts.register === 'string' && REGISTERS[opts.register] ? opts.register : null;
+  let register;
+  if (!chosenId) {
+    register = { ...detected, source: 'detected' };
+  } else if (chosenId === detected.id) {
+    register = { ...detected, source: 'confirmed' };
+  } else {
+    register = {
+      id: chosenId,
+      label: REGISTERS[chosenId].label,
+      quality: 'assumed',
+      confidencePct: 0,
+      evidence: detected.evidence || [],
+      reason: detected.id === 'plain'
+        ? `Profile set manually to ${REGISTERS[chosenId].label}. No genre markers were found in the text, so this is your call, not a measurement.`
+        : `Profile set manually to ${REGISTERS[chosenId].label}, but the text's own markers point to ${detected.label}. Treat the calibration as a preference, not a finding.`,
+      margins: detected.margins || null,
+      profile: REGISTERS[chosenId],
+      source: 'user'
+    };
+  }
+  if (!register.profile) register.profile = REGISTERS[register.id] || REGISTERS.plain;
+
+  const profile = register.profile;
+  // A 'weak' guess never changes the score; a profile the writer picked, or one the
+  // text's own vocabulary supports, does.
+  const scoringActive = register.id !== 'plain'
+    && (register.quality === 'measured' || register.quality === 'inferred' || register.source === 'user');
+
+  // adjusted measurements the signals read from
+  const relax = (r) => (r && scoringActive && r.includes(register.id) ? profile.markerRelax : 1);
+  let markerApplied = 0;
+  for (const h of ctx.markerHits) markerApplied += h.count * h.weight * relax(h.registers);
+  ctx.markerDensityApplied = ctx.allWords.length ? (markerApplied / ctx.allWords.length) * 100 : 0;
+  ctx.formalDensityAdjusted = Math.max(0, ctx.formalDensity + (scoringActive ? profile.formalDensityShift : 0));
+  const relaxedPhrases = ctx.markerHits.filter((h) => relax(h.registers) < 1).map((h) => h.phrase);
+
+  /* ------------------------------------------------------- signals */
+  const signals = SIGNAL_DEFS.map((def) => {
+    let mult = scoringActive ? (profile.weights[def.id] || 1) : 1;
+    const outOfRegister = !!(def.profiles && scoringActive && !def.profiles.includes(register.id));
+    if (outOfRegister) mult *= 0.25;   // this signal can't legitimately judge this genre
+    const weight = round(def.weight * mult, 2);
+    const v = def.measure(ctx);
+    const applicable = v !== null && v !== undefined && Number.isFinite(v);
+    const aiScore = applicable ? clamp(def.score(v, ctx)) : 0;
+    let note = null;
+    if (applicable && register.id !== 'plain') {
+      if (outOfRegister) {
+        note = `Muted to 0.25× — this signal cannot fairly judge ${register.label.toLowerCase()} writing.`;
+      } else if (mult > 1) {
+        note = `Weighted up ${mult}× for ${register.label.toLowerCase()} text.`;
+      } else if (mult < 1) {
+        note = `Counted lightly (${mult}×) because it is normal in ${register.label.toLowerCase()} writing.`;
+      }
+    }
+    return {
+      id: def.id, name: def.name, group: def.group,
+      weight, baseWeight: def.weight, weightMultiplier: round(mult, 2),
+      about: def.about, detail: def.detail, note,
+      value: applicable ? round(v, 3) : null,
+      display: def.fmt(applicable ? v : null),
+      aiScore: round(aiScore, 3),
+      humanScore: round(1 - aiScore, 3),
+      applicable,
+      contribution: 0
+    };
+  });
+
+  const used = signals.filter((s) => s.applicable);
+  const totalWeight = sum(used.map((s) => s.weight));
+  const raw = totalWeight ? sum(used.map((s) => s.weight * s.aiScore)) / totalWeight : 0;
+  for (const s of signals) s.contribution = s.applicable && totalWeight ? round((s.weight * s.aiScore / totalWeight) * 100, 1) : 0;
+
+  /* --------------------------- calibration: same measurements, no register discounts */
+  let calRaw = raw;
+  let calibration = null;
+  if (scoringActive) {
+    const baseTotal = sum(used.map((s) => s.baseWeight));
+    calRaw = baseTotal ? sum(used.map((s) => s.baseWeight * s.aiScore)) / baseTotal : raw;
+    // when calibration is requested the formal-register measurement is also un-shifted
+    if (profile.formalDensityShift) {
+      const fv = signals.find((x) => x.id === 'formalVocab');
+      if (fv && fv.applicable) {
+        const unshifted = clamp((ctx.formalDensity - 1.6) / 5.5);
+        const delta = (unshifted - fv.aiScore) * SIGNAL_DEFS.find((d) => d.id === 'formalVocab').weight;
+        const denom = baseTotal;
+        calRaw = denom ? (sum(used.map((x) => x.baseWeight * (x.id === 'formalVocab' ? unshifted : x.aiScore)))) / denom : calRaw;
+      }
+    }
+    calibration = {
+      id: register.id, label: register.label, quality: register.quality, source: register.source,
+      uncalibratedScore: null, // filled below once confidence is known
+      relaxedPhrases,
+      note: `Calibrated for ${register.label.toLowerCase()} register: ${relaxedPhrases.length ? `${relaxedPhrases.length} genre-neutral phrase type(s) discounted, ` : ''}formal vocabulary weighted ${(profile.weights.formalVocab || 1).toFixed(2)}×.`
+    };
+  }
+
+  if (ctx.sentences.length === 0 || ctx.unique.size < 3) {
+    return { error: 'Not enough prose to analyse — paste at least one full sentence of real text.' };
+  }
+
+  const allWords = ctx.allWords;
+  const words = allWords.length;
+  const stats = {
+    chars: text.length,
+    words,
+    uniqueWords: ctx.unique.size,
+    sentences: ctx.sentences.length,
+    paragraphs: ctx.paragraphs.length,
+    ttr: words ? round(ctx.unique.size / words, 3) : 0,
+    avgSentence: round(ctx.len.mean, 1),
+    medianSentence: (() => { const l = ctx.sentences.map((s) => s.wordCount).sort((a, b) => a - b); return l.length ? l[Math.floor(l.length / 2)] : 0; })(),
+    sentenceSd: round(ctx.len.sd, 2),
+    burstiness: round(ctx.len.cv, 3),
+    longest: ctx.len.max, shortest: ctx.len.min,
+    readingTimeMin: Math.max(1, Math.round(words / 220)),
+    digits: ctx.digitTokens,
+    emDashes: ctx.emDashes
+  };
+
+  const confidence = confidenceFor(words, ctx.sentences.length);
+  const SHARPEN = 1.22; // mild decisiveness curve around the midpoint
+  const curve = (basePct) => Math.round(clamp(50 + (basePct - 50) * SHARPEN * confidence.factor, 2, 98));
+  const base = raw * 100;
+  const score = curve(base);
+  const uncalibratedScore = register.id === 'plain' ? null : curve(calRaw * 100);
+
+  if (calibration) {
+    calibration.uncalibratedScore = uncalibratedScore;
+    calibration.delta = uncalibratedScore - score;
+    calibration.note += calibration.delta === 0
+      ? ' Applying the profile made no difference to this particular text.'
+      : ` Applying the profile moved the score from ${uncalibratedScore} to ${score} (${calibration.delta > 0 ? '+' : ''}${calibration.delta}).`;
+  }
+
+  const verdict = VERDICTS.find((v) => score < v.max) || VERDICTS[VERDICTS.length - 1];
+  const sensitivity = opts._nested ? { items: [], maxImpact: 0 } : buildSensitivity(signals);
+
+  let confidenceNote = confidence.note;
+  if (sensitivity.maxImpact >= 16) {
+    confidenceNote += ` Score is volatile: withdrawing the strongest single signal moves it about ${sensitivity.maxImpact} points, so read it as a range rather than a point.`;
+  }
+
+  const sortedSignals = [...signals].sort((a, b) => (b.weight * b.aiScore) - (a.weight * a.aiScore));
+  const humanSignals = [...signals].filter((s) => s.applicable).sort((a, b) => (b.weight * b.humanScore) - (a.weight * a.humanScore));
+
+  const paragraphs = opts._nested ? null : buildParagraphReport(text, ctx.sentences, opts);
+  const recommendations = opts._nested ? [] : buildRecommendations(ctx, stats, register, paragraphs)
+    .filter((r) => !r.registers || !register.id || register.id === 'plain' || r.registers.includes(register.id));
+
+  return {
+    engineVersion: ENGINE_VERSION,
+    score,
+    rawScore: round(base, 1),
+    calibrated: register.id !== 'plain',
+    register: {
+      id: register.id, label: register.label, quality: register.quality, source: register.source,
+      active: register.id !== 'plain',
+      confidencePct: register.confidencePct || 0,
+      evidence: register.evidence || [],
+      reason: register.reason,
+      blurb: profile.blurb,
+      qualityNote: {
+        measured: "Register identified from the text's own genre markers.",
+        inferred: 'Register inferred from a handful of markers — reasonably confident, not certain.',
+        weak: 'Only a faint genre signal found. Shown for information but NOT applied to the score.',
+        assumed: 'You selected this profile manually, so it reflects your intent rather than the text.',
+        plain: 'No register-specific scoring in effect.'
+      }[register.quality] || '',
+      relaxedPhrases,
+      weightsApplied: Object.fromEntries(Object.entries(profile ? profile.weights : {}))
+    },
+    calibration,
+    verdict: { id: verdict.id, label: verdict.label, blurb: verdict.blurb },
+    confidence: { ...confidence, note: confidenceNote, volatility: sensitivity.maxImpact },
+    stats,
+    signals,
+    totalWeight: round(totalWeight, 2),
+    sensitivity,
+    paragraphs,
+    topSignals: sortedSignals.filter((s) => s.applicable && s.aiScore >= 0.5).slice(0, 5),
+    humanSignals: humanSignals.filter((s) => s.humanScore >= 0.6).slice(0, 5),
+    findings: {
+      markers: ctx.markerHits.slice(0, 12).map(({ phrase, count, weight, registers }) => ({ phrase, count, weight, registers: registers || null, relaxed: register.id !== 'plain' && registers && registers.includes(register.id) })),
+      markerTotal: ctx.markerHits.reduce((n, m) => n + m.count, 0),
+      formal: ctx.formalHits.slice(0, 10),
+      discourse: ctx.discourseHits.slice(0, 8),
+      contractions: ctx.contractionList.slice(0, 10),
+      casualStrong: ctx.casualStrong,
+      casualSoft: ctx.casualSoft.slice(0, 8),
+      emoji: ctx.emojiCount,
+      questions: ctx.questions,
+      exclaims: ctx.exclaims,
+      missingApos: ctx.missingApos,
+      lowercaseStarts: ctx.lowercaseStarts
+    },
+    segments: ctx.segs.map((s) => {
+      if (s.kind !== 'sentence') return { kind: s.kind, text: s.text };
+      const src = ctx.sentences.find((x) => x.text === s.text && x.used !== true);
+      const info = src || {};
+      if (src) src.used = true;
+      return {
+        kind: 'sentence', text: s.text,
+        score: info.score === undefined || info.score === null ? null : info.score,
+        band: info.band || 'short',
+        reasons: info.reasons || ['Too short to score on its own'],
+        words: info.wordCount || tokenize(s.text).length
+      };
+    }),
+    spans: { ai: buildSpans(ctx.sentences, 'ai'), human: buildSpans(ctx.sentences, 'human') },
+    recommendations,
+    registerOptions: REGISTER_ORDER.map((id) => ({ id, label: REGISTERS[id].label, blurb: REGISTERS[id].blurb })),
+    disclaimer: 'TellTale measures statistical style signals. It cannot prove authorship: human writing can be flagged and polished machine writing can slip through. Never use a single score as the sole basis for an accusation, grade or moderation decision.'
+  };
+}
+
+module.exports = { analyze, normalizeText, segment, detectRegister, buildParagraphReport, SIGNAL_DEFS, REGISTERS, REGISTER_ORDER, ENGINE_VERSION };

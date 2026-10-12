@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About — TellTale</title>
+<meta name="description" content="Why this exists, how it's built, how to run it yourself, and the API it exposes.">
+
+<meta property="og:site_name" content="TellTale">
+<meta property="og:type" content="website">
+<meta property="og:title" content="About — TellTale">
+<meta property="og:description" content="Why this exists, how it's built, how to run it yourself, and the API it exposes.">
+<meta property="og:image" content="/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="About — TellTale">
+<meta name="twitter:description" content="Why this exists, how it's built, how to run it yourself, and the API it exposes.">
+<meta name="twitter:image" content="/assets/og.png">
+<meta name="theme-color" content="#0b0c0f">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a99cff"/><stop offset="1" stop-color="#5eead4"/></linearGradient></defs>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="url(#lg)" opacity="0.14"/>
+        <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="none" stroke="url(#lg)" stroke-width="1.4"/>
+        <path d="M8.5 21.5c1.6-5.6 4.3-8.4 7.5-8.4s5.9 2.8 7.5 8.4" fill="none" stroke="url(#lg)" stroke-width="2.1" stroke-linecap="round"/>
+        <circle cx="16" cy="9.6" r="2.1" fill="url(#lg)"/>
+      </svg>
+      <span class="b">Tell<span class="dot">Tale</span></span>
+    </a>
+    <button class="nav-toggle" aria-label="Menu">☰</button>
+    <div class="nav-links">
+      <a href="/analyze">Analyse</a>
+      <a href="/compare">Compare</a>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/how-it-works">How it works</a>
+      <a href="/about">About</a>
+      <a class="nav-cta" href="/analyze">Check a text</a>
+    </div>
+  </div>
+</nav>
+
+<main class="wrap wrap-narrow" style="padding-top:46px">
+  <div class="eyebrow">About</div>
+  <h1 style="font-size:clamp(1.9rem,4vw,2.9rem)">A detector that shows its work</h1>
+  <p style="font-size:1.05rem">Detectors have become gatekeepers — in classrooms, in hiring pipelines, in editorial inboxes — while remaining black boxes that quote a confidence percentage nobody can audit. TellTale is the opposite bet: a small, readable engine whose every measurement you can inspect, argue with, and change.</p>
+
+  <div class="grid grid-2" style="margin:26px 0">
+    <div class="card">
+      <h3>Principles</h3>
+      <ul class="checklist">
+        <li class="yes"><b>1</b><span><strong>Show the reasoning.</strong> Every point of the score is attributed to a named signal with a measurement beside it.</span></li>
+        <li class="yes"><b>2</b><span><strong>Abstain honestly.</strong> Short, thin or contradictory evidence produces "inconclusive", not false confidence.</span></li>
+        <li class="yes"><b>3</b><span><strong>Local by default.</strong> No third-party APIs, no telemetry, no hidden model calls. Your text stays on the machine running this.</span></li>
+        <li class="yes"><b>4</b><span><strong>Never punitive.</strong> The output is designed to start a conversation, and says so at the bottom of every report.</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Engineering</h3>
+      <ul class="checklist">
+        <li class="yes"><b>·</b><span><strong>Runtime:</strong> Node 18+, standard library only. No framework, no build step for the server, no dependencies to audit.</span></li>
+        <li class="yes"><b>·</b><span><strong>Frontend:</strong> vanilla JavaScript. The same engine file scores text live in the browser as you type, so previews and reports can't disagree.</span></li>
+        <li class="yes"><b>·</b><span><strong>Storage:</strong> a JSON file (<code>data/scans.json</code>), capped at 400 scans, each keeping its full evidence pack. Delete it and there is nothing left.</span></li>
+        <li class="yes"><b>·</b><span><strong>Tests:</strong> a calibration harness, a register/paragraph suite, a docs-number generator that keeps published figures honest, and a headless UI smoke test that drives every page.</span></li>
+        <li class="yes"><b>·</b><span><strong>Speed:</strong> a few milliseconds per analysis; the network is the slow part.</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Run it yourself</h2>
+  <p>Clone the folder, start the process, open the port. That's the whole setup.</p>
+  <div class="codeblock"><span class="c"># no install step — zero dependencies</span>
+node src/server.js
+<span class="c"># → http://localhost:4173</span>
+
+<span class="c"># optional: regenerate the browser engine bundle</span>
+node scripts/build-client.js
+
+<span class="c"># optional: see the calibration harness</span>
+node scripts/selftest.js</div>
+
+  <h2 style="margin-top:38px">API</h2>
+  <p>The UI is just a client of these endpoints. Everything it can do, you can do with <code>curl</code>.</p>
+  <table class="table">
+    <thead><tr><th>Endpoint</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">POST /api/analyze</td><td><code>{ "text": "…", "save": true, "register": "academic" }</code> → full report: score, verdict, confidence, register + calibration, 14 signals, paragraph report, sensitivity, heatmap segments, spans, recommendations. <code>register</code> is optional — omit it for auto-detection.</td></tr>
+      <tr><td class="mono">GET /api/registers</td><td>The available scoring profiles with their weight adjustments, discount factors and phrase relaxation.</td></tr>
+      <tr><td class="mono">POST /api/report</td><td>Export an unsaved report: <code>{ "text": "…", "format": "md" | "json" }</code> → Markdown evidence pack or signed JSON bundle (download headers included).</td></tr>
+      <tr><td class="mono">GET /api/report/:id</td><td>Same exports for a stored scan, with <code>?format=json&label=…</code>.</td></tr>
+      <tr><td class="mono">POST /api/verify</td><td>Re-computes the SHA-256 digest of a JSON bundle and reports whether it has been modified.</td></tr>
+      <tr><td class="mono">POST /api/compare</td><td><code>{ "texts": [{ "label", "text" }, …] }</code> → compact results for 2–4 texts on identical scales.</td></tr>
+      <tr><td class="mono">GET /api/sample?kind=ai</td><td>Serves a built-in sample (<code>ai</code>, <code>human</code>, <code>mixed</code>).</td></tr>
+      <tr><td class="mono">GET /api/history?limit=25</td><td>Recent scans without their full text.</td></tr>
+      <tr><td class="mono">GET /api/scan/:id</td><td>One stored scan including the original text.</td></tr>
+      <tr><td class="mono">DELETE /api/scan/:id</td><td>Delete a single scan.</td></tr>
+      <tr><td class="mono">GET /api/stats</td><td>Aggregates for the dashboard: distribution, shares, recurring phrases, feed.</td></tr>
+      <tr><td class="mono">POST /api/clear</td><td>Wipe all stored scans.</td></tr>
+    </tbody>
+  </table>
+  <div class="codeblock" style="margin-top:14px"><span class="c"># one-liner</span>
+curl -s localhost:4173/api/analyze -H 'content-type: application/json' \
+  -d '{"text":"It is important to note that in today'"'"'s fast-paced world, teams must leverage robust frameworks."}' | head -c 400</div>
+
+  <h2 style="margin-top:38px">Ethics</h2>
+  <div class="callout-ethics">
+    <p>Automated authorship detection has a documented history of harming people: false accusations against students, bias against non-native English writers, and confident numbers attached to ambiguous evidence. TellTale is built to reduce that harm, not to industrialise it. If you are using this to evaluate another person, you owe them the reasoning, a chance to respond, and a decision process that doesn't rest on a single score.</p>
+  </div>
+
+  <h3 style="margin-top:26px">Shipped</h3>
+  <ul class="checklist">
+    <li class="yes"><b>✓</b><span>Per-paragraph reports with mixed-authorship detection, so a generated intro on a human body can't hide behind an average.</span></li>
+    <li class="yes"><b>✓</b><span>Register calibration for academic, legal, technical, journalistic and personal writing — detected from genre markers or set manually, with the before/after delta always disclosed.</span></li>
+    <li class="yes"><b>✓</b><span>Evidence packs: Markdown reports and JSON bundles with a SHA-256 integrity digest, verifiable via <code>POST /api/verify</code>.</span></li>
+    <li class="yes"><b>✓</b><span>Score-sensitivity analysis: how far the verdict moves when the strongest signal is withdrawn.</span></li>
+  </ul>
+
+  <h3 style="margin-top:26px">What's next</h3>
+  <ul class="checklist">
+    <li class="yes"><b>→</b><span>An adversarial test suite that measures how far a paraphrase pass can move the score — and publishes the answer.</span></li>
+    <li class="yes"><b>→</b><span>Batch mode: score a folder of submissions and rank by machine-likelihood with paragraph outliers surfaced.</span></li>
+    <li class="yes"><b>→</b><span>Register-specific phrase lists so "however" is judged by the genre it appears in rather than a global rule.</span></li>
+  </ul>
+
+  <div class="note" style="margin:30px 0">TellTale is a self-contained demo project: MIT licensed, no accounts, no analytics, no third-party services. One Node process, one JSON file, one HTML report at a time.</div>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/" style="margin-bottom:10px">
+          <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+            <rect x="1.2" y="1.2" width="29.6" height="29.6" rx="9.5" fill="none" stroke="#8b7cf6" stroke-width="1.4"/>
+            <path d="M8.5 21.5c1.6-5.6 4.3-8.4 7.5-8.4s5.9 2.8 7.5 8.4" fill="none" stroke="#5eead4" stroke-width="2.1" stroke-linecap="round"/>
+            <circle cx="16" cy="9.6" r="2.1" fill="#8b7cf6"/>
+          </svg>
+          <span class="b">Tell<span class="dot">Tale</span></span>
+        </a>
+        <p class="small muted" style="max-width:34ch">Stylometric AI-text detection with the reasoning left visible.</p>
+      </div>
+      <div><h4>Product</h4><a href="/analyze">Analyser</a><a href="/compare">Compare texts</a><a href="/dashboard">Dashboard</a></div>
+      <div><h4>Method</h4><a href="/how-it-works">How it works</a><a href="/how-it-works#signals">The 14 signals</a><a href="/how-it-works#ethics">Limits &amp; ethics</a></div>
+      <div><h4>Project</h4><a href="/about">About</a><a href="/privacy">Privacy</a>
+          <a href="/api/health">API health</a><a href="/api/stats">API stats</a></div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span id="yr"></span> TellTale. Zero dependencies, one Node process, no telemetry.</span>
+      <span>Detection is probabilistic. Use it to start a conversation, not to end someone's career.</span>
+    </div>
+  </div>
+</footer>
+
+<script src="/assets/app.js"></script>
+<script>document.getElementById('yr').textContent = new Date().getFullYear();</script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+# Fly.io — `fly launch` then `fly deploy`
+app = "telltale"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "4173"
+  DATA_DIR = "/data"
+  # Set to "false" on a public deployment if you don't want submitted text saved:
+  STORE_SCANS = "true"
+
+[[mounts]]
+  source = "telltale_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 4173
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "20s"
+    timeout = "4s"
+    grace_period = "6s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

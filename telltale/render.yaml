@@ -1,0 +1,14 @@
+# Render — connect the repo and Render picks this up automatically
+services:
+  - type: web
+    name: telltale
+    runtime: node
+    plan: free
+    buildCommand: node scripts/build-client.js
+    startCommand: node src/server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: STORE_SCANS
+        value: "true"
