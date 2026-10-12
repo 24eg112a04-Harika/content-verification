@@ -1,14 +1,44 @@
-# Render — connect the repo and Render picks this up automatically
+# TellTale on Render — https://render.com/docs/blueprint-spec
+#
+# The app lives in telltale/ but the Git repo root is one level up, so
+# `rootDir: telltale` is what makes the build/start commands findable.
+# Two ways to use this file:
+#
+#   1. Blueprint:  Dashboard → New → Blueprint → pick this repo and set the
+#      Blueprint File path to `telltale/render.yaml`.
+#   2. By hand:    Dashboard → New → Web Service → pick this repo and set
+#      Root Directory = `telltale`, then use the same values as below.
+#
+# Render deploys the branch you connect (main by default) and rebuilds on
+# every push to it. Region is Singapore (closest to India — pick at creation,
+# it can't be changed later without recreating the service).
 services:
   - type: web
     name: telltale
     runtime: node
-    plan: free
+    rootDir: telltale
+    plan: free # free sleeps after ~15 min idle; paid = always-on + persistent disks
+    region: singapore
     buildCommand: node scripts/build-client.js
     startCommand: node src/server.js
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
+      # Free instances have no persistent disk: data/scans.json resets on every
+      # deploy. Keep "true" for a personal demo (history works until the next
+      # deploy); set "false" on a public deployment so submitted text is never
+      # written to disk. Reports and exports work either way.
       - key: STORE_SCANS
         value: "true"
+      # Node >= 18 required; optionally pin the runtime:
+      # - key: NODE_VERSION
+      #   value: "20"
+
+    # Persistent scan history (paid instances only — disks aren't available on
+    # free). Uncomment the disk, switch plan above to a paid one (e.g. 1c-2g),
+    # add `- key: DATA_DIR` / `value: /data` to envVars, and set STORE_SCANS=true:
+    # disk:
+    #   name: telltale-data
+    #   mountPath: /data
+    #   sizeGB: 1
